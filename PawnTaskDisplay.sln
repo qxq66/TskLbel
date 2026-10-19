@@ -1,0 +1,10 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PawnTaskDisplay", "Source\PawnTaskDisplay.csproj", "{00FA3B48-8A0A-49A9-B7A6-4000A418B281}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PawnTaskDisplay.1.7", "Source\PawnTaskDisplay.1.7.csproj", "{9977D811-92A0-4BAD-A9A6-A8A81C537817}"
+EndProject
+Global
+EndGlobal
