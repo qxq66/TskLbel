@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Text;
 using RimWorld;
 using UnityEngine;
 using Verse;
@@ -13,7 +14,12 @@ namespace PawnTaskDisplay
         private sealed class PawnLabelEntry
         {
             public Pawn Pawn;
-            public string Label;
+            public string ShortLabel;
+            public string FullLabel;
+            public bool Forced;
+            public int JobId = -1;
+            public float JobStart;
+            public float LastHover = -999f;
         }
 
         private readonly Dictionary<Pawn, PawnLabelEntry> entriesByPawn = new Dictionary<Pawn, PawnLabelEntry>();
@@ -77,8 +83,14 @@ namespace PawnTaskDisplay
                 return;
             }
 
+            if (!ZoomAllows(settings))
+            {
+                return;
+            }
+
             EnsureStyles(settings);
             CellRect viewRect = Find.CameraDriver.CurrentViewRect.ExpandedBy(1);
+            float now = Time.realtimeSinceStartup;
             for (int i = 0; i < renderEntries.Count; i++)
             {
                 PawnLabelEntry entry = renderEntries[i];
@@ -88,8 +100,73 @@ namespace PawnTaskDisplay
                     continue;
                 }
 
-                DrawLabel(pawn, entry.Label, settings);
+                bool hovered = (settings.HoverOnly || settings.ExpandOnHover) && IsHovered(pawn);
+                if (hovered)
+                {
+                    entry.LastHover = now;
+                }
+
+                if (settings.HoverOnly)
+                {
+                    if (now - entry.LastHover > settings.HoverSeconds)
+                    {
+                        continue;
+                    }
+                }
+                else if (settings.AutoHide && now - entry.JobStart > settings.AutoHideSeconds)
+                {
+                    continue;
+                }
+
+                string text = (settings.ExpandOnHover && hovered) ? entry.FullLabel : entry.ShortLabel;
+                Color color = (settings.UseForcedColor && entry.Forced) ? settings.ForcedColor : settings.LabelColor;
+                DrawLabel(pawn, text, color, settings);
             }
+        }
+
+        private static bool ShouldShow(Pawn pawn, PawnTaskDisplaySettings settings)
+        {
+            if (pawn == null || pawn.RaceProps == null)
+            {
+                return false;
+            }
+
+            Faction player = Faction.OfPlayer;
+            if (pawn.RaceProps.Animal)
+            {
+                return settings.ShowAnimals && pawn.Faction == player;
+            }
+            if (!pawn.RaceProps.Humanlike)
+            {
+                return false;
+            }
+            if (pawn.IsPrisonerOfColony)
+            {
+                return settings.ShowPrisoners;
+            }
+            if (pawn.Faction == player)
+            {
+                return pawn.IsSlave ? settings.ShowSlaves : settings.ShowColonists;
+            }
+            return settings.ShowVisitors && pawn.Faction != null && !pawn.HostileTo(player) &&
+                pawn.HostFaction == null && !pawn.IsPrisoner;
+        }
+
+        private static bool ZoomAllows(PawnTaskDisplaySettings settings)
+        {
+            if (settings.ZoomMode == TaskLabelZoomMode.Off)
+            {
+                return true;
+            }
+            bool reached = Find.CameraDriver.CurrentZoom >= settings.ZoomLevel;
+            return settings.ZoomMode == TaskLabelZoomMode.HideFromZoom ? !reached : reached;
+        }
+
+        private static bool IsHovered(Pawn pawn)
+        {
+            Vector3 mouse = UI.MouseMapPosition();
+            Vector3 draw = pawn.DrawPos;
+            return Mathf.Abs(mouse.x - draw.x) < 0.6f && Mathf.Abs(mouse.z - draw.z) < 0.6f;
         }
 
         private void RefreshCache(PawnTaskDisplaySettings settings)
@@ -101,7 +178,7 @@ namespace PawnTaskDisplay
             for (int i = 0; i < pawns.Count; i++)
             {
                 Pawn pawn = pawns[i];
-                if (pawn == null || pawn.Faction != Faction.OfPlayer || pawn.RaceProps == null || !pawn.RaceProps.Humanlike)
+                if (!ShouldShow(pawn, settings))
                 {
                     continue;
                 }
@@ -128,12 +205,6 @@ namespace PawnTaskDisplay
                     continue;
                 }
 
-                string label = BuildLabel(report, pawn, job, settings);
-                if (string.IsNullOrEmpty(label))
-                {
-                    continue;
-                }
-
                 PawnLabelEntry entry;
                 if (!entriesByPawn.TryGetValue(pawn, out entry))
                 {
@@ -141,7 +212,19 @@ namespace PawnTaskDisplay
                     entriesByPawn.Add(pawn, entry);
                 }
 
-                entry.Label = label;
+                if (entry.JobId != job.loadID)
+                {
+                    entry.JobId = job.loadID;
+                    entry.JobStart = Time.realtimeSinceStartup;
+                }
+                entry.Forced = job.playerForced;
+
+                BuildLabels(entry, report, pawn, job, settings);
+                if (string.IsNullOrEmpty(entry.ShortLabel))
+                {
+                    continue;
+                }
+
                 renderEntries.Add(entry);
                 seenPawns.Add(pawn);
             }
@@ -160,22 +243,78 @@ namespace PawnTaskDisplay
             }
         }
 
-        private static string BuildLabel(string report, Pawn pawn, Job job, PawnTaskDisplaySettings settings)
+        private static void BuildLabels(PawnLabelEntry entry, string report, Pawn pawn, Job job, PawnTaskDisplaySettings settings)
         {
             string task = ApplyTextCase(report.Trim(), settings.TextCase);
             string format = string.IsNullOrEmpty(settings.LabelFormat) ? "{task}" : settings.LabelFormat;
-            string label = format
+            string full = format
                 .Replace("{task}", task)
                 .Replace("{pawn}", pawn.LabelShort ?? string.Empty)
                 .Replace("{job}", job.def.defName ?? string.Empty);
+            full = full.Replace("\\n", "\n");
 
-            label = label.Replace("\\n", "\n");
-            if (settings.LimitLength && label.Length > settings.MaximumCharacters)
+            string shortText = full;
+            if (settings.LimitLength && shortText.Length > settings.MaximumCharacters)
             {
                 int keep = Math.Max(0, settings.MaximumCharacters - 1);
-                label = label.Substring(0, keep) + "…";
+                shortText = shortText.Substring(0, keep) + "…";
             }
-            return label;
+
+            if (settings.WrapLines)
+            {
+                entry.ShortLabel = Wrap(shortText, settings.WrapCharacters, settings.MaxLines);
+                entry.FullLabel = Wrap(full, settings.WrapCharacters, int.MaxValue);
+            }
+            else
+            {
+                entry.ShortLabel = shortText;
+                entry.FullLabel = full;
+            }
+        }
+
+        private static string Wrap(string text, int width, int maxLines)
+        {
+            List<string> lines = new List<string>();
+            string[] paragraphs = text.Split('\n');
+            for (int p = 0; p < paragraphs.Length; p++)
+            {
+                StringBuilder line = new StringBuilder();
+                string[] words = paragraphs[p].Split(' ');
+                for (int w = 0; w < words.Length; w++)
+                {
+                    string word = words[w];
+                    if (word.Length == 0)
+                    {
+                        continue;
+                    }
+                    if (line.Length == 0)
+                    {
+                        line.Append(word);
+                    }
+                    else if (line.Length + 1 + word.Length <= width)
+                    {
+                        line.Append(' ').Append(word);
+                    }
+                    else
+                    {
+                        lines.Add(line.ToString());
+                        line.Length = 0;
+                        line.Append(word);
+                    }
+                }
+                if (line.Length > 0)
+                {
+                    lines.Add(line.ToString());
+                }
+            }
+
+            if (lines.Count > maxLines)
+            {
+                lines = lines.GetRange(0, maxLines);
+                string last = lines[maxLines - 1].TrimEnd('…', ' ');
+                lines[maxLines - 1] = last + "…";
+            }
+            return string.Join("\n", lines.ToArray());
         }
 
         private static string ApplyTextCase(string value, TaskLabelTextCase textCase)
@@ -197,7 +336,7 @@ namespace PawnTaskDisplay
             }
         }
 
-        private void DrawLabel(Pawn pawn, string label, PawnTaskDisplaySettings settings)
+        private void DrawLabel(Pawn pawn, string label, Color color, PawnTaskDisplaySettings settings)
         {
             Vector2 origin = GenMapUI.LabelDrawPosFor(pawn, -0.6f);
             labelContent.text = label;
@@ -208,9 +347,11 @@ namespace PawnTaskDisplay
             Rect rect = CalculateRect(origin, size, settings);
             if (settings.DrawShadow)
             {
+                shadowStyle.normal.textColor = new Color(0f, 0f, 0f, color.a * 0.8f);
                 Rect shadowRect = new Rect(rect.x + 1f, rect.y + 1f, rect.width, rect.height);
                 GUI.Label(shadowRect, labelContent, shadowStyle);
             }
+            labelStyle.normal.textColor = color;
             GUI.Label(rect, labelContent, labelStyle);
         }
 
