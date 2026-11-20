@@ -11,8 +11,10 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - run: dotnet restore Source/PawnTaskDisplay.csproj
-      - run: dotnet build Source/PawnTaskDisplay.csproj -c Release --no-restore
+      - run: dotnet build Source/PawnTaskDisplay.csproj -c Release --no-restore -o ${{ github.workspace }}/out/1.6/Assemblies
+      - run: ls -la ${{ github.workspace }}/out/1.6/Assemblies
       - uses: actions/upload-artifact@v4
         with:
           name: PawnTaskDisplay-RimWorld-1.6
-          path: 1.6/Assemblies/PawnTaskDisplay.dll
+          path: out/1.6/Assemblies/PawnTaskDisplay.dll
+          if-no-files-found: error
